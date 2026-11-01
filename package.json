@@ -1,0 +1,21 @@
+{
+  "name": "@deckweave/plugin-sdk",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Dependency-free SDK for DeckWeave action plugins",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./sdk.d.ts",
+      "import": "./sdk.mjs"
+    }
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "GPL-3.0-or-later",
+  "scripts": {
+    "test": "node --test",
+    "check": "node --check sdk.mjs && node --test"
+  }
+}
