@@ -30,6 +30,64 @@ const descriptor = (instanceId) => ({
   lighting: [],
 });
 const tick = () => new Promise((r) => setImmediate(r));
+const travelDescriptor = (id) => {
+  const d = descriptor(id);
+  d.controls[0].telemetry = { keyTravel: true };
+  d.observation = { keyTravel: { minUm:0, maxUm:4000, staleAfterMs:600, normalTyping:true, evidence:"partial" } };
+  return d;
+};
+test("travel observation is explicit, coalesced, isolated from action sequence, and stopped on close", async () => {
+  const messages = [], contexts = new Map(), writes = [];
+  const f = fixture({ send:m => messages.push(m), open:(id,c) => {
+    contexts.set(id,c);
+    return { descriptor:travelDescriptor(id), readState:()=>({observed:{}}),
+      observe:({enabled})=>{ writes.push([id,enabled]); return {observing:enabled}; },
+      close:()=>({recovery:"not_needed"}) };
+  }});
+  await f.send("hello",{protocol:1});
+  await f.send("open",{session:"s",generation:1,instanceId:"a"});
+  await f.send("open",{session:"b",generation:1,instanceId:"b"});
+  assert.deepEqual(writes,[]);
+  assert.equal(contexts.get("a").depth("key-1",{travelUm:5}),false);
+  await f.send("observe",{session:"s",generation:1,enabled:true}); await tick();
+  for(let n=0;n<100;n++) contexts.get("a").depth("key-1",{travelUm:n,maxTravelUm:3970});
+  assert.equal(contexts.get("b").depth("key-1",{travelUm:50}),false);
+  assert.throws(()=>contexts.get("a").depth("missing",{travelUm:1}));
+  assert.throws(()=>contexts.get("a").depth("key-1",{travelUm:10001}));
+  await new Promise(r=>setTimeout(r,60));
+  const depth = messages.filter(m=>m.type==="depth");
+  assert.equal(depth.length,1); assert.equal(depth[0].value.travelUm,99);
+  assert.equal(depth[0].sequence,1);
+  contexts.get("a").input("key-1","down");
+  assert.equal(messages.find(m=>m.type==="input").sequence,1);
+  await f.send("close",{session:"s",generation:1}); await tick();
+  assert.deepEqual(writes,[["a",true],["a",false]]);
+  assert.equal(contexts.get("a").depth("key-1",{travelUm:2}),false);
+  assert.equal(f.p.sessions.has("b"),true);
+  f.p.shutdown();
+});
+test("observation lease stops an abandoned editor and uncertain enable remains stoppable", async () => {
+  const writes=[]; let failStart=false;
+  const f=fixture({open:id=>({ descriptor:travelDescriptor(id),readState:()=>({observed:{}}),
+    observe:({enabled})=>{writes.push(enabled);if(enabled&&failStart)throw Error("uncertain");return {observing:enabled};},
+    close:()=>({recovery:"not_needed"}) })});
+  await f.send("hello",{protocol:1}); await f.send("open",{session:"s",generation:1,instanceId:"a"});
+  await f.send("observe",{session:"s",generation:1,enabled:true}); await tick();
+  await new Promise(r=>setTimeout(r,3100)); await tick();
+  assert.deepEqual(writes,[true,false]);
+  failStart=true;
+  await f.send("observe",{session:"s",generation:1,enabled:true}); await tick();
+  await f.send("close",{session:"s",generation:1}); await tick();
+  assert.deepEqual(writes,[true,false,true,false]);
+});
+test("passive strip decoration keeps no input address and validates geometry", () => {
+  const d=descriptor("a");
+  d.decorations=[{id:"side",kind:"light-strip",label:{en:"Strip",ru:"Полоса"},x:1,y:0,width:1,height:1}];
+  assert.equal(validateDescriptor(d).controls.length,1);
+  d.decorations[0].width=2; assert.throws(()=>validateDescriptor(d));
+  const travel=travelDescriptor("a"); travel.observation.keyTravel.maxUm=10001;
+  assert.throws(()=>validateDescriptor(travel));
+});
 test("device manifests distinguish native/node entries and reject executable substitution or action-shaped fields", () => {
   const m = {
     kind: "device",

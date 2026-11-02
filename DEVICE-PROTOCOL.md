@@ -194,3 +194,45 @@ For cold recovery the host may start retained code with
 refuse ordinary `setSettings`/`display` and input in that mode, even after markers
 are resolved. Only explicit recovery writes are allowed. Completing recovery does
 not clear the host's removal/disable intent; normal use requires explicit reconnect.
+
+## Volatile key travel observation
+
+This optional telemetry path is separate from action input and persisted settings.
+Opening a device or reading its state never enables it. A descriptor can declare
+`observation:{keyTravel:{minUm:0,maxUm:4000,staleAfterMs:600,normalTyping:true,evidence:"partial"}}`
+and `telemetry:{keyTravel:true}` on each supported physical key control. `maxUm`
+is the documented visualization scale, not a calibration guarantee; IO84 uses a
+nominal 4 mm scale and partial physical evidence. Passive `decorations` such as a
+`light-strip` have geometry and localized labels but no control/input address.
+
+`observe` carries `{session,generation,enabled:boolean}` and returns
+`{observing:boolean}` only after the adapter confirms the requested mode. Enable
+must preserve ordinary typing. Recovery-only and pending-recovery sessions reject
+enable; disable, cancel and close still attempt to stop observation. No mapping,
+capture, reset or calibration command belongs to this operation.
+
+Fresh telemetry messages are
+`{type:"depth",session,generation,sequence,control,value:{travelUm,maxTravelUm?}}`.
+Values are integer micrometres, bounded to 0..10000; `maxTravelUm` is optional
+packet evidence and must not be assumed to be the normalization denominator.
+Depth uses its own monotonically increasing sequence, independent of ordered
+digital input. Coalesce latest samples per declared key, at most 30 flushes per
+second, and never retransmit cached samples as fresh observations. The SDK's
+`context.depth(control,value)` performs that bounded coalescing. There are no raw
+ADC dumps, permanent telemetry logs or fabricated zero/release events.
+
+Observation has a three-second renewable lease. The host renews `observe(true)`
+while editor subscribers are alive; adapters must stop on expiry, EOF, cancel,
+close and destruction. Renewal need not issue repeated USB mode commands. The
+desktop additionally expires individual window subscriptions after three seconds
+without targeted polling. Samples use host receipt age and become unknown after
+600 ms; stale samples disappear instead of showing zero. An uncertain stop is
+reported as an error, rather than claiming that hardware mode was restored.
+
+Desktop IPC `set_provider_observation(deviceId,enabled)` and
+`provider_observation(deviceId)` return the narrow volatile snapshot
+`{enabled,state,sequence,samples:[{controlId,travelUm,maxTravelUm,ageMs}],error}`.
+States are `off`, `starting`, `observing`, `stopping`, or `error`. Polling renews
+only the caller window's already enabled lease; closing that window removes its
+subscriptions. These updates do not clone the application snapshot, modify Core
+configuration revisions, dispatch actions or emit application-wide change events.
