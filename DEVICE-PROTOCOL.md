@@ -41,7 +41,7 @@ unique strings within a process connection. They are never action contexts.
 | `cancel`          | `session`, `generation`                                        | cancellation result                 |
 | `close`           | `session`, `generation`                                        | recovery result                     |
 | `recoveryPreview` | `session`, `generation`, optional `snapshotId`                 | explicit recovery preview           |
-| `recover`         | `session`, `generation`, `previewToken`, `confirmedInstanceId` | observed state plus recovery result |
+| `recover`         | `session`, `generation`, `previewToken`, `confirmedInstanceId`, optional `resolution` | observed state plus recovery result |
 
 `hello` must succeed before other requests. Unknown messages fail with
 `unsupported`. Reused/older generations fail with `stale_generation`; an open
@@ -154,6 +154,24 @@ reset, calibration, capture or flash is permitted on discovery/open.
 
 ## Explicit recovery
 
+`recover.resolution` is optional: omitted or `"restore"` requests restoration;
+`"keepCurrent"` explicitly accepts the already verified complete requested state.
+It never means “ignore the error” or “trust an ACK”. Preview declares
+`restoreAvailable` and `canKeepCurrent`; a legacy incomplete snapshot can return
+`restoreAvailable:false,canKeepCurrent:true,reason:"legacy_lighting_projection"`.
+If neither action is available there is no confirmation token.
+
+For `keepCurrent`, the token is tied to the current full readback, original
+snapshot, selected live instance and expiry. The adapter reads again and requires
+the complete canonical requested target to match, writes a durable
+`accepted_verified_current` receipt, atomically retires the pending intent and
+retains the original historical snapshot. It sends no hardware settings write.
+Success must explicitly include `recovery:"completed",resolution:"keepCurrent",
+outcome:"accepted_verified_current"`; missing proof is an error. The SDK and host
+refuse this resolution unless the latest matching preview advertised support,
+protecting against older providers that ignore unfamiliar fields. No preview or
+matching readback automatically accepts changes or deletes a pending marker.
+
 Recovery methods are optional adapter methods; absent methods fail with
 `unsupported`. A descriptor declares `recovery:{preview:true,restore:true}` only
 when implemented. Ordinary state can include
@@ -236,3 +254,44 @@ States are `off`, `starting`, `observing`, `stopping`, or `error`. Polling renew
 only the caller window's already enabled lease; closing that window removes its
 subscriptions. These updates do not clone the application snapshot, modify Core
 configuration revisions, dispatch actions or emit application-wide change events.
+
+## Optional settings presentation
+
+Providers can describe compact controls without device-specific renderer rules.
+These fields describe presentation only; they do not add writable settings or
+permit a write that the provider cannot validate against current hardware.
+
+A numeric setting can declare `presentation:"slider"`. A setting can also declare
+`visibleWhen:{settingId:"effect",values:["solid"]}`. The referenced setting must
+be a declared choice or boolean; the condition lists 1–32 distinct scalar values
+from that setting's declared domain. Conditions cannot reference their own
+setting or form cycles. Conditions support equality membership only, with no
+scripts, arbitrary expressions or numeric range evaluation. Editors evaluate
+visibility from observed values; an unknown or unconfirmed controlling value
+must not enable a dependent hardware control.
+
+Each lighting group can optionally include up to 16 color controls:
+
+```json
+"colorChannels": [{
+  "id": "primary",
+  "label": {"en": "Color", "ru": "Цвет"},
+  "r": "redAmount", "g": "greenAmount", "b": "blueAmount",
+  "visibleWhen": {"settingId": "effect", "values": ["solid"]}
+}]
+```
+
+Each RGB component references a distinct declared numeric setting owned by that
+lighting group's `settings` list, with minimum 0, maximum 255 and step 1 or an
+omitted step. IDs are unique within the group's color controls. Labels are
+optional bounded en/ru plain text; the ID supplies a fallback. A color control
+uses the same bounded `visibleWhen` condition. Unknown presentation fields do
+not create new hardware capabilities. Existing descriptors without presentation
+metadata retain the generic setting list.
+
+The existing per-key `lighting[].staticColors` capability can likewise declare
+`visibleWhen:{settingId:"effect",values:["individual"]}`. It uses the same
+bounded declared-choice/boolean condition, even when the group has no
+`colorChannels`. The editor obtains the required effect's name from the
+referenced setting's localized choices. Visibility is based on observed state;
+the adapter separately rejects individual-color writes in unsupported effects.

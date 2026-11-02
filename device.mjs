@@ -118,23 +118,71 @@ export function validateDescriptor(d) {
     )
       throw new DeviceError("descriptor", "Invalid or duplicate control");
     ids.add(c.id);
-    if (c.telemetry !== undefined && (!object(c.telemetry) || c.kind !== "key" || c.telemetry.keyTravel !== true))
-      throw new DeviceError("descriptor", "Invalid key travel control capability");
+    if (
+      c.telemetry !== undefined &&
+      (!object(c.telemetry) ||
+        c.kind !== "key" ||
+        c.telemetry.keyTravel !== true)
+    )
+      throw new DeviceError(
+        "descriptor",
+        "Invalid key travel control capability",
+      );
   }
   if (d.observation !== undefined) {
     const range = d.observation?.keyTravel;
-    if (!object(range) || !Number.isInteger(range.minUm) || range.minUm !== 0 ||
-        !Number.isInteger(range.maxUm) || range.maxUm <= 0 || range.maxUm > 10000 ||
-        range.staleAfterMs !== 600 || typeof range.normalTyping !== "boolean" ||
-        !["partial", "verified"].includes(range.evidence))
-      throw new DeviceError("descriptor", "Invalid key travel observation range");
+    if (
+      !object(range) ||
+      !Number.isInteger(range.minUm) ||
+      range.minUm !== 0 ||
+      !Number.isInteger(range.maxUm) ||
+      range.maxUm <= 0 ||
+      range.maxUm > 10000 ||
+      range.staleAfterMs !== 600 ||
+      typeof range.normalTyping !== "boolean" ||
+      !["partial", "verified"].includes(range.evidence)
+    )
+      throw new DeviceError(
+        "descriptor",
+        "Invalid key travel observation range",
+      );
   }
   for (const k of ["displays", "settings", "lighting"])
     if (!Array.isArray(d[k]))
       throw new DeviceError("descriptor", `Missing ${k}`);
-  if(d.decorations!==undefined) {
-    if(!Array.isArray(d.decorations)||d.decorations.length>32||new Set(d.decorations.map(v=>v?.id)).size!==d.decorations.length)throw new DeviceError("descriptor","Invalid passive decorations");
-    for(const decoration of d.decorations)if(!object(decoration)||!token(decoration.id)||decoration.kind!=="light-strip"||!object(decoration.label)||![decoration.label.en,decoration.label.ru].every(s=>typeof s==="string"&&s.trim()&&s.length<=120)||![decoration.x,decoration.y,decoration.width,decoration.height].every(Number.isFinite)||decoration.x<0||decoration.y<0||decoration.width<=0||decoration.height<=0||decoration.x+decoration.width>d.geometry.width||decoration.y+decoration.height>d.geometry.height)throw new DeviceError("descriptor","Invalid passive decoration geometry");
+  if (d.decorations !== undefined) {
+    if (
+      !Array.isArray(d.decorations) ||
+      d.decorations.length > 32 ||
+      new Set(d.decorations.map((v) => v?.id)).size !== d.decorations.length
+    )
+      throw new DeviceError("descriptor", "Invalid passive decorations");
+    for (const decoration of d.decorations)
+      if (
+        !object(decoration) ||
+        !token(decoration.id) ||
+        decoration.kind !== "light-strip" ||
+        !object(decoration.label) ||
+        ![decoration.label.en, decoration.label.ru].every(
+          (s) => typeof s === "string" && s.trim() && s.length <= 120,
+        ) ||
+        ![
+          decoration.x,
+          decoration.y,
+          decoration.width,
+          decoration.height,
+        ].every(Number.isFinite) ||
+        decoration.x < 0 ||
+        decoration.y < 0 ||
+        decoration.width <= 0 ||
+        decoration.height <= 0 ||
+        decoration.x + decoration.width > d.geometry.width ||
+        decoration.y + decoration.height > d.geometry.height
+      )
+        throw new DeviceError(
+          "descriptor",
+          "Invalid passive decoration geometry",
+        );
   }
   const label = (v) =>
     object(v) &&
@@ -196,6 +244,44 @@ export function validateDescriptor(d) {
         ))
     )
       throw new DeviceError("descriptor", "Invalid choices");
+    if (
+      setting.presentation !== undefined &&
+      (setting.presentation !== "slider" || setting.type !== "number")
+    )
+      throw new DeviceError("descriptor", "Invalid setting presentation");
+  }
+  const condition = (value, owner) => {
+    if (value === undefined) return;
+    const ref = d.settings.find((s) => s.id === value?.settingId);
+    if (
+      !object(value) ||
+      Object.keys(value).some((k) => !["settingId", "values"].includes(k)) ||
+      !ref ||
+      ref.id === owner ||
+      !["choice", "boolean"].includes(ref.type) ||
+      !Array.isArray(value.values) ||
+      value.values.length < 1 ||
+      value.values.length > 32 ||
+      new Set(value.values.map((v) => JSON.stringify(v))).size !==
+        value.values.length ||
+      value.values.some((v) =>
+        ref.type === "boolean"
+          ? typeof v !== "boolean"
+          : !ref.choices.some((c) => Object.is(c.value, v)),
+      )
+    )
+      throw new DeviceError("descriptor", "Invalid visibility condition");
+  };
+  for (const setting of d.settings) condition(setting.visibleWhen, setting.id);
+  for (const setting of d.settings) {
+    const seen = new Set();
+    let current = setting;
+    while (current?.visibleWhen) {
+      if (seen.has(current.id))
+        throw new DeviceError("descriptor", "Cyclic visibility condition");
+      seen.add(current.id);
+      current = d.settings.find((s) => s.id === current.visibleWhen.settingId);
+    }
   }
   for (const group of d.lighting)
     if (
@@ -205,6 +291,39 @@ export function validateDescriptor(d) {
       group.settings?.some((id) => !d.settings.some((s) => s.id === id))
     )
       throw new DeviceError("descriptor", "Invalid lighting group");
+  for (const group of d.lighting) {
+    condition(group.staticColors?.visibleWhen);
+    if (group.colorChannels === undefined) continue;
+    if (
+      !Array.isArray(group.colorChannels) ||
+      group.colorChannels.length > 16 ||
+      new Set(group.colorChannels.map((c) => c?.id)).size !==
+        group.colorChannels.length
+    )
+      throw new DeviceError("descriptor", "Invalid lighting color channels");
+    for (const channel of group.colorChannels) {
+      const refs = [channel?.r, channel?.g, channel?.b];
+      if (
+        !object(channel) ||
+        !token(channel.id) ||
+        (channel.label !== undefined && !label(channel.label)) ||
+        new Set(refs).size !== 3 ||
+        refs.some((id) => {
+          const s = d.settings.find((s) => s.id === id);
+          return (
+            !group.settings?.includes(id) ||
+            !s ||
+            s.type !== "number" ||
+            s.min !== 0 ||
+            s.max !== 255 ||
+            (s.step !== undefined && s.step !== 1)
+          );
+        })
+      )
+        throw new DeviceError("descriptor", "Invalid lighting RGB references");
+      condition(channel.visibleWhen);
+    }
+  }
   return d;
 }
 export class DeviceProvider {
@@ -323,7 +442,8 @@ export class DeviceProvider {
             signal: s.controller.signal,
             input: (control, event, value) =>
               this.input(m.session, m.generation, control, event, value),
-            depth: (control, value) => this.depth(m.session, m.generation, control, value),
+            depth: (control, value) =>
+              this.depth(m.session, m.generation, control, value),
           });
           s.descriptor = validateDescriptor(s.adapter.descriptor);
           if (s.descriptor.instanceId !== m.instanceId)
@@ -367,8 +487,15 @@ export class DeviceProvider {
         throw new DeviceError("closing", "Session close is pending");
       if (m.type === "observe" && typeof m.enabled !== "boolean")
         throw new DeviceError("malformed", "observe.enabled must be boolean");
-      if (m.type === "observe" && m.enabled && (this.recoveryOnly || s.recoveryOnly))
-        throw new DeviceError("recovery_only", "Observation is unavailable during recovery");
+      if (
+        m.type === "observe" &&
+        m.enabled &&
+        (this.recoveryOnly || s.recoveryOnly)
+      )
+        throw new DeviceError(
+          "recovery_only",
+          "Observation is unavailable during recovery",
+        );
       if (["close", "cancel"].includes(m.type)) {
         if (m.type === "close") s.closing = true;
         s.controller.abort();
@@ -388,7 +515,8 @@ export class DeviceProvider {
         !(
           s.recoveryOnly &&
           ["readState", "recoveryPreview", "recover"].includes(m.type)
-        ) && !(m.type === "observe" && m.enabled === false)
+        ) &&
+        !(m.type === "observe" && m.enabled === false)
       )
         throw new DeviceError(
           "session_failed",
@@ -467,18 +595,29 @@ export class DeviceProvider {
               !(
                 s.recoveryOnly &&
                 ["readState", "recoveryPreview", "recover"].includes(m.type)
-              ) && !(m.type === "observe" && m.enabled === false)
+              ) &&
+              !(m.type === "observe" && m.enabled === false)
             )
               throw new DeviceError(
                 "session_failed",
                 "Resolve recovery or reopen before ordinary work",
               );
-            if (s.controller.signal.aborted && !(m.type === "observe" && m.enabled === false))
+            if (
+              s.controller.signal.aborted &&
+              !(m.type === "observe" && m.enabled === false)
+            )
               throw new DeviceError("cancelled", "Session work cancelled");
             if (m.type === "setSettings" && !object(m.changes))
               throw new DeviceError("malformed", "changes must be an object");
-            if (m.type === "observe" && m.enabled && !s.descriptor.observation?.keyTravel)
-              throw new DeviceError("unsupported", "Key travel observation is not declared");
+            if (
+              m.type === "observe" &&
+              m.enabled &&
+              !s.descriptor.observation?.keyTravel
+            )
+              throw new DeviceError(
+                "unsupported",
+                "Key travel observation is not declared",
+              );
             if (
               m.type === "recoveryPreview" &&
               m.snapshotId !== undefined &&
@@ -487,11 +626,36 @@ export class DeviceProvider {
               throw new DeviceError("malformed", "Invalid snapshot identifier");
             if (
               m.type === "recover" &&
-              (!token(m.previewToken) || !token(m.confirmedInstanceId))
+              (!token(m.previewToken) ||
+                !token(m.confirmedInstanceId) ||
+                (m.resolution !== undefined &&
+                  !["restore", "keepCurrent"].includes(m.resolution)))
             )
               throw new DeviceError(
                 "malformed",
                 "Recovery needs a preview token and explicit instance confirmation",
+              );
+            if (
+              m.type === "recover" &&
+              m.resolution === "keepCurrent" &&
+              (!s.recoveryPreview?.canKeepCurrent ||
+                s.recoveryPreview.previewToken !== m.previewToken ||
+                s.recoveryPreview.instance !== m.confirmedInstanceId ||
+                Date.now() > s.recoveryPreview.expires)
+            )
+              throw new DeviceError(
+                "recovery_preview",
+                "Keeping current settings requires a fresh explicit supported preview",
+              );
+            if (
+              m.type === "recover" &&
+              m.resolution !== "keepCurrent" &&
+              s.recoveryPreview?.previewToken === m.previewToken &&
+              s.recoveryPreview.restoreAvailable === false
+            )
+              throw new DeviceError(
+                "recovery_snapshot_incomplete",
+                "Original settings cannot be restored from this snapshot",
               );
             if (
               m.type === "display" &&
@@ -506,27 +670,73 @@ export class DeviceProvider {
             const fn = s.adapter[m.type];
             if (typeof fn !== "function")
               throw new DeviceError("unsupported", `${m.type} unsupported`);
-            if (m.type === "observe" && m.enabled) s.observationNeedsStop = true;
+            if (m.type === "observe" && m.enabled)
+              s.observationNeedsStop = true;
             value = await fn.call(s.adapter, {
               ...m,
-              signal: m.type === "observe" && !m.enabled ? new AbortController().signal : s.controller.signal,
+              signal:
+                m.type === "observe" && !m.enabled
+                  ? new AbortController().signal
+                  : s.controller.signal,
             });
+            if (m.type === "recoveryPreview") {
+              s.recoveryPreview =
+                token(value?.previewToken) &&
+                token(value?.confirmedInstanceId) &&
+                Number.isFinite(value?.expiresInMs) &&
+                value.expiresInMs > 0 &&
+                value.expiresInMs <= 60000
+                  ? {
+                      previewToken: value.previewToken,
+                      instance: value.confirmedInstanceId,
+                      canKeepCurrent: value.canKeepCurrent === true,
+                      restoreAvailable: value.restoreAvailable,
+                      expires: Date.now() + value.expiresInMs,
+                    }
+                  : null;
+            }
+            if (m.type === "recover") {
+              s.recoveryPreview = null;
+              if (
+                m.resolution === "keepCurrent" &&
+                (value?.recovery !== "completed" ||
+                  value?.resolution !== "keepCurrent" ||
+                  value?.outcome !== "accepted_verified_current")
+              )
+                throw new DeviceError(
+                  "recovery_pending",
+                  "Adapter did not confirm explicit acceptance of verified current settings",
+                );
+            }
             if (m.type === "observe") {
               if (value?.observing !== m.enabled)
-                throw new DeviceError("observation", "Adapter did not confirm observation state");
-              if (!m.enabled) { this.clearObservation(s); s.observationNeedsStop = false; }
-              else {
+                throw new DeviceError(
+                  "observation",
+                  "Adapter did not confirm observation state",
+                );
+              if (!m.enabled) {
+                this.clearObservation(s);
+                s.observationNeedsStop = false;
+              } else {
                 s.observing = true;
                 clearTimeout(s.depthLease);
                 s.depthLease = setTimeout(() => {
                   this.clearObservation(s);
-                  void this.receive({ type:"observe", requestId:`lease-${session}`, session,
-                    generation:s.generation, enabled:false });
+                  void this.receive({
+                    type: "observe",
+                    requestId: `lease-${session}`,
+                    session,
+                    generation: s.generation,
+                    enabled: false,
+                  });
                 }, 3000);
                 s.depthLease.unref?.();
               }
             }
-            if (s.controller.signal.aborted && !(m.type === "observe" && m.enabled === false))
+            if (
+              s.controller.signal.aborted &&
+              !(m.type === "observe" && m.enabled === false)
+            )
               throw new DeviceError("cancelled", "Session work cancelled");
             const recovery = value?.recoveryState ?? value?.recovery;
             if (recovery?.state === "pending") {
@@ -598,25 +808,64 @@ export class DeviceProvider {
     const active = s.observationNeedsStop;
     this.clearObservation(s);
     if (active && typeof s.adapter?.observe === "function") {
-      const reply = await s.adapter.observe({ enabled:false, signal:new AbortController().signal });
-      if (reply?.observing !== false) throw new DeviceError("observation", "Observation stop is unconfirmed");
+      const reply = await s.adapter.observe({
+        enabled: false,
+        signal: new AbortController().signal,
+      });
+      if (reply?.observing !== false)
+        throw new DeviceError("observation", "Observation stop is unconfirmed");
       s.observationNeedsStop = false;
     }
   }
   depth(session, generation, control, value) {
     const s = this.sessions.get(session);
-    if (!s || s.generation !== generation || !s.observing || s.failed || s.closing || this.recoveryOnly) return false;
-    const c = s.descriptor.controls.find(c => c.id === control);
-    if (c?.telemetry?.keyTravel !== true || !Number.isInteger(value?.travelUm) || value.travelUm < 0 || value.travelUm > 10000 ||
-        (value.maxTravelUm !== undefined && (!Number.isInteger(value.maxTravelUm) || value.maxTravelUm < 0 || value.maxTravelUm > 10000)))
-      throw new DeviceError("observation", "Undeclared or invalid key travel sample");
-    s.depthSamples.set(control, { value:{travelUm:value.travelUm, ...(value.maxTravelUm === undefined ? {} : {maxTravelUm:value.maxTravelUm})}, received:performance.now() });
+    if (
+      !s ||
+      s.generation !== generation ||
+      !s.observing ||
+      s.failed ||
+      s.closing ||
+      this.recoveryOnly
+    )
+      return false;
+    const c = s.descriptor.controls.find((c) => c.id === control);
+    if (
+      c?.telemetry?.keyTravel !== true ||
+      !Number.isInteger(value?.travelUm) ||
+      value.travelUm < 0 ||
+      value.travelUm > 10000 ||
+      (value.maxTravelUm !== undefined &&
+        (!Number.isInteger(value.maxTravelUm) ||
+          value.maxTravelUm < 0 ||
+          value.maxTravelUm > 10000))
+    )
+      throw new DeviceError(
+        "observation",
+        "Undeclared or invalid key travel sample",
+      );
+    s.depthSamples.set(control, {
+      value: {
+        travelUm: value.travelUm,
+        ...(value.maxTravelUm === undefined
+          ? {}
+          : { maxTravelUm: value.maxTravelUm }),
+      },
+      received: performance.now(),
+    });
     if (!s.depthFlush) {
       s.depthFlush = setTimeout(() => {
         s.depthFlush = undefined;
-        if (s.observing && !s.failed && !s.closing) for (const [control, sample] of s.depthSamples)
-          if (performance.now() - sample.received < 600) this.send({ type:"depth",session,generation,
-            sequence:++s.depthSequence,control,value:sample.value });
+        if (s.observing && !s.failed && !s.closing)
+          for (const [control, sample] of s.depthSamples)
+            if (performance.now() - sample.received < 600)
+              this.send({
+                type: "depth",
+                session,
+                generation,
+                sequence: ++s.depthSequence,
+                control,
+                value: sample.value,
+              });
         s.depthSamples.clear();
       }, 34);
       s.depthFlush.unref?.();
@@ -627,8 +876,13 @@ export class DeviceProvider {
     for (const [session, s] of this.sessions) {
       s.controller.abort();
       // Keep teardown behind the running adapter call, exactly like explicit cancel.
-      if (!s.closing) void this.receive({type:"cancel",requestId:`shutdown-${session}`,
-        session,generation:s.generation});
+      if (!s.closing)
+        void this.receive({
+          type: "cancel",
+          requestId: `shutdown-${session}`,
+          session,
+          generation: s.generation,
+        });
     }
   }
 }

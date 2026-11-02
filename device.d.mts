@@ -12,12 +12,18 @@ export interface Label {
   en: string;
   ru: string;
 }
+export interface VisibleWhen {
+  settingId: string;
+  values: Array<string | number | boolean | null>;
+}
 export interface SettingBase {
   id: string;
   label: Label;
   group?: string;
   persistence: "volatile" | "onboard";
   readback: boolean;
+  visibleWhen?: VisibleWhen;
+  presentation?: "slider";
 }
 export type Setting = SettingBase &
   (
@@ -38,7 +44,13 @@ export interface DisplayTarget {
   mime: string[];
 }
 export interface Decoration {
-  id:string;kind:"light-strip";label:Label;x:number;y:number;width:number;height:number;
+  id: string;
+  kind: "light-strip";
+  label: Label;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 export interface LightingGroup {
   id: string;
@@ -46,7 +58,19 @@ export interface LightingGroup {
   kind: string;
   controls?: string[];
   settings?: string[];
-  staticColors?: { settingId: string; address: "controlId" };
+  staticColors?: {
+    settingId: string;
+    address: "controlId";
+    visibleWhen?: VisibleWhen;
+  };
+  colorChannels?: Array<{
+    id: string;
+    label?: Label;
+    r: string;
+    g: string;
+    b: string;
+    visibleWhen?: VisibleWhen;
+  }>;
   hostCompositions?: boolean;
 }
 export interface KeyboardCapabilities {
@@ -99,20 +123,28 @@ export interface Descriptor {
     telemetry?: { keyTravel: true };
   }>;
   displays: DisplayTarget[];
-  decorations?:Decoration[];
+  decorations?: Decoration[];
   settings: Setting[];
   lighting: LightingGroup[];
   keyboard?: KeyboardCapabilities;
   recovery?: { preview: boolean; restore: boolean };
-  observation?: { keyTravel: {
-    minUm: 0; maxUm: number; staleAfterMs: 600; normalTyping: boolean;
-    evidence: "partial" | "verified";
-  } };
+  observation?: {
+    keyTravel: {
+      minUm: 0;
+      maxUm: number;
+      staleAfterMs: 600;
+      normalTyping: boolean;
+      evidence: "partial" | "verified";
+    };
+  };
 }
 export interface Context {
   signal: AbortSignal;
   input: (control: string, event: InputEvent, value?: unknown) => boolean;
-  depth: (control: string, value: { travelUm: number; maxTravelUm?: number }) => boolean;
+  depth: (
+    control: string,
+    value: { travelUm: number; maxTravelUm?: number },
+  ) => boolean;
 }
 export interface Adapter {
   descriptor: Descriptor;
@@ -131,8 +163,10 @@ export interface Adapter {
   }) => unknown;
   cancel?: () => unknown;
   /** Volatile observer only; preserve normal typing and stop on close/EOF/lease expiry. */
-  observe?: (request: { enabled: boolean; signal: AbortSignal }) =>
-    { observing: boolean } | Promise<{ observing: boolean }>;
+  observe?: (request: {
+    enabled: boolean;
+    signal: AbortSignal;
+  }) => { observing: boolean } | Promise<{ observing: boolean }>;
   close?: () => unknown;
   recoveryPreview?: (request: {
     snapshotId?: string;
@@ -141,6 +175,7 @@ export interface Adapter {
   recover?: (request: {
     previewToken: string;
     confirmedInstanceId: string;
+    resolution?: "restore" | "keepCurrent";
     signal: AbortSignal;
   }) => unknown;
 }
@@ -178,8 +213,12 @@ export class DeviceProvider {
     event: string,
     value?: unknown,
   ): boolean;
-  depth(session: string, generation: number, control: string,
-    value: { travelUm: number; maxTravelUm?: number }): boolean;
+  depth(
+    session: string,
+    generation: number,
+    control: string,
+    value: { travelUm: number; maxTravelUm?: number },
+  ): boolean;
   shutdown(): void;
 }
 export function serveDevice(
