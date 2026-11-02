@@ -37,6 +37,10 @@ extension. The device adapter capability and RAM ownership are documented in
 
 ## Property Inspector
 
+DeckWeave-only sound/panel requests and background service contexts are specified
+in [Host services v1](HOST-SERVICES.md). They require explicit capability
+negotiation after standard registration and are unavailable to PI sockets.
+
 Declare `PropertyInspectorPath` in the manifest. Host calls `window.connectElgatoStreamDeckSocket(port, uuid, registerEvent, infoJson, actionInfoJson)` after the HTML loads. Register a second socket with `{event:registerEvent,uuid}`. The PI context is `uuid`; initial settings are `JSON.parse(actionInfoJson).payload.settings`. Save with `setSettings`, exchange plugin messages via `sendToPlugin` and `sendToPropertyInspector`; update fields on `didReceiveSettings`. Declare en/ru strings in the page and choose using `JSON.parse(infoJson).application.language`. Use `textContent`, never untrusted HTML. Backend and PI are separate clients, not shared JS state.
 
 ## Separate provisional device SDK

@@ -45,6 +45,79 @@ function setup(onError = () => {}) {
   Socket.last.open();
   return [p, Socket.last];
 }
+
+test("host services negotiate independently, retain background contexts, and acknowledge typed requests", async () => {
+  const p = createPlugin({
+    arguments: {
+      ...args,
+      info: { deckweave: { services: { sound: 1, panels: 1, timers: 1 } } },
+    },
+    WebSocket: Socket,
+  });
+  const s = Socket.last;
+  s.open();
+  assert.equal(s.sent[0].event, "registerPlugin");
+  assert.equal(s.sent[1].event, "deckweaveServiceRegister");
+  s.message({ event: "willAppear", context: "action" });
+  const visible = p.contexts.get("action");
+  const opening = visible.panels.open("main", {
+    title: "Note",
+    content: { type: "note", text: "A" },
+  });
+  const request = s.sent.at(-1);
+  assert.equal(request.operation, "open");
+  s.message({
+    event: "deckweaveServiceResult",
+    requestId: request.requestId,
+    ok: true,
+    value: { id: "panel" },
+  });
+  assert.equal((await opening).id, "panel");
+  s.message({
+    event: "deckweaveServiceDidAppear",
+    context: "service",
+    payload: { panel: { id: "panel" } },
+  });
+  s.message({ event: "willDisappear", context: "action" });
+  assert.equal(p.services.get("service").active, true);
+  assert.equal(visible.active, false);
+  const update = p.services
+    .get("service")
+    .panels.update("panel", { value: "5" });
+  const next = s.sent.at(-1);
+  s.message({
+    event: "deckweaveServiceResult",
+    requestId: next.requestId,
+    ok: false,
+    error: { code: "closed", message: "Panel closed" },
+  });
+  await assert.rejects(update, (e) => e.code === "closed");
+  s.message({ event: "deckweaveServiceDidDisappear", context: "service" });
+  assert.equal(p.services.size, 0);
+  p.dispose();
+});
+
+test("unsupported host service and disconnect are explicit rejected promises", async () => {
+  const [p, s] = setup();
+  s.message({ event: "willAppear", context: "action" });
+  await assert.rejects(
+    p.contexts.get("action").playSound({ sound: "notice", eventId: "test" }),
+    (e) => e.code === "unsupported",
+  );
+  p.dispose();
+  const q = createPlugin({
+    arguments: { ...args, info: { deckweave: { services: { sound: 1 } } } },
+    WebSocket: Socket,
+  });
+  const socket = Socket.last;
+  socket.open();
+  socket.message({ event: "willAppear", context: "a" });
+  const pending = q.contexts
+    .get("a")
+    .playSound({ sound: "notice", eventId: "test" });
+  socket.close();
+  await assert.rejects(pending, (e) => e.code === "disconnected");
+});
 test("key lighting helper sends only its own context event and stops when invisible", () => {
   const [p, s] = setup();
   s.message({ event: "willAppear", context: "a" });

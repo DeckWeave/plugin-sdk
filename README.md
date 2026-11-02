@@ -41,6 +41,10 @@ Pass `onError(error, message)` through the `createPlugin({ onError })` option to
 
 ## Methods
 
+Optional [host services](HOST-SERVICES.md) add acknowledged sound, persistent
+desktop notes/metrics and native countdown panels. They use separate negotiated
+capabilities and background contexts; they do not extend Elgato `willAppear`.
+
 Context: `setTitle`, `setImage` (data URL), `setState`, `setFeedback`, `setFeedbackLayout`, `setSettings`, `getSettings`, `showAlert`, `showOk`, `sendToPropertyInspector`, and raw `send`. All return whether a message was sent; this does **not** acknowledge execution by the host. Plugin: `on`, `send`, `setGlobalSettings`, `getGlobalSettings`, `onDispose`, `dispose`, `contexts`, `info`.
 
 Read [the action protocol contract](PROTOCOL.md), [contribution guide](CONTRIBUTING.md), and run `npm test`. The action runtime does not open USB/HID or register devices. The separate provisional [device protocol](DEVICE-PROTOCOL.md) and `./device` entry support hardware providers; they are not part of the Elgato action API.

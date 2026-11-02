@@ -49,8 +49,12 @@ export function createPlugin(options = {}) {
   const socket = new Socket(`ws://127.0.0.1:${args.port}`);
   const contexts = new Map(),
     handlers = new Map(),
+    services = new Map(),
+    pending = new Map(),
     disposers = new Set();
-  let disposed = false;
+  let disposed = false,
+    requestSerial = 0;
+  const capabilities = args.info?.deckweave?.services ?? {};
   const report = (error, message) => {
     try {
       (options.onError ?? ((e) => console.error("[DeckWeave plugin]", e)))(
@@ -85,6 +89,64 @@ export function createPlugin(options = {}) {
     for (const fn of [...(handlers.get(event) ?? [])])
       call(fn, context, message);
   };
+  const serviceRequest = (context, operation, payload) =>
+    new Promise((resolve, reject) => {
+      const capability =
+        operation === "sound"
+          ? "sound"
+          : operation === "timer"
+            ? "timers"
+            : "panels";
+      if (!capabilities[capability]) {
+        reject(
+          Object.assign(new Error("Host does not support " + capability), {
+            code: "unsupported",
+          }),
+        );
+        return;
+      }
+      if (disposed || socket.readyState !== 1) {
+        reject(
+          Object.assign(new Error("Host is disconnected"), {
+            code: "disconnected",
+          }),
+        );
+        return;
+      }
+      if (pending.size >= 32) {
+        reject(
+          Object.assign(new Error("Too many service requests"), {
+            code: "busy",
+          }),
+        );
+        return;
+      }
+      const requestId = "service-" + ++requestSerial;
+      const timer = setTimeout(() => {
+        pending.delete(requestId);
+        reject(
+          Object.assign(new Error("Host service timed out"), {
+            code: "timeout",
+          }),
+        );
+      }, 8000);
+      pending.set(requestId, { resolve, reject, timer });
+      try {
+        socket.send(
+          JSON.stringify({
+            event: "deckweaveService",
+            requestId,
+            context,
+            operation,
+            payload,
+          }),
+        );
+      } catch (error) {
+        clearTimeout(timer);
+        pending.delete(requestId);
+        reject(error);
+      }
+    });
   const makeContext = (message) => {
     const cleanup = new Set(),
       abort = new AbortController();
@@ -99,6 +161,40 @@ export function createPlugin(options = {}) {
         message.payload?.canvas ??
         (message.payload?.controller === "Encoder" ? [200, 100] : [112, 112]),
       state: {},
+      panel: message.payload?.panel,
+      capabilities,
+      service(operation, payload) {
+        return active
+          ? serviceRequest(ctx.id, operation, payload)
+          : Promise.reject(
+              Object.assign(new Error("Context is disposed"), {
+                code: "disposed",
+              }),
+            );
+      },
+      playSound(options) {
+        return ctx.service("sound", options);
+      },
+      panels: {
+        get(key = "main") {
+          return ctx.service("get", { key });
+        },
+        open(key, spec) {
+          return ctx.service("open", { key, spec });
+        },
+        update(id, value, revision = ctx.panel?.revision) {
+          return ctx.service("update", { id, value, revision });
+        },
+        configure(id, revision, spec) {
+          return ctx.service("configure", { id, revision, spec });
+        },
+        close(id, revision) {
+          return ctx.service("close", { id, revision });
+        },
+        timer(id, command, options = {}) {
+          return ctx.service("timer", { id, command, ...options });
+        },
+      },
       signal: abort.signal,
       get active() {
         return active;
@@ -194,6 +290,44 @@ export function createPlugin(options = {}) {
       return;
     }
     if (!message || typeof message.event !== "string") return;
+    if (message.event === "deckweaveServiceResult") {
+      const request = pending.get(message.requestId);
+      if (request) {
+        pending.delete(message.requestId);
+        clearTimeout(request.timer);
+        if (message.ok) request.resolve(message.value);
+        else
+          request.reject(
+            Object.assign(
+              new Error(message.error?.message ?? "Service failed"),
+              { code: message.error?.code ?? "service" },
+            ),
+          );
+      }
+      return;
+    }
+    if (message.event === "deckweaveServiceDidAppear") {
+      services.get(message.context)?._dispose();
+      const ctx = makeContext(message);
+      services.set(message.context, ctx);
+      emit(message.event, ctx, message);
+      return;
+    }
+    if (message.event === "deckweaveServiceDidChange") {
+      const ctx = services.get(message.context);
+      if (ctx) {
+        ctx.panel = message.payload?.panel;
+        emit(message.event, ctx, message);
+      }
+      return;
+    }
+    if (message.event === "deckweaveServiceDidDisappear") {
+      const ctx = services.get(message.context);
+      emit(message.event, ctx, message);
+      ctx?._dispose();
+      services.delete(message.context);
+      return;
+    }
     let ctx = contexts.get(message.context);
     if (message.event === "willAppear") {
       ctx?._dispose();
@@ -216,6 +350,15 @@ export function createPlugin(options = {}) {
     disposed = true;
     for (const ctx of contexts.values()) ctx._dispose();
     contexts.clear();
+    for (const ctx of services.values()) ctx._dispose();
+    services.clear();
+    for (const request of pending.values()) {
+      clearTimeout(request.timer);
+      request.reject(
+        Object.assign(new Error("Host disconnected"), { code: "disconnected" }),
+      );
+    }
+    pending.clear();
     handlers.clear();
     for (const fn of disposers) call(fn);
     disposers.clear();
@@ -228,6 +371,13 @@ export function createPlugin(options = {}) {
       socket.send(
         JSON.stringify({ event: args.registerEvent, uuid: args.uuid }),
       );
+      if (capabilities.panels || capabilities.sound)
+        socket.send(
+          JSON.stringify({
+            event: "deckweaveServiceRegister",
+            payload: { version: 1 },
+          }),
+        );
     } catch (e) {
       report(e);
       dispose();
@@ -241,6 +391,8 @@ export function createPlugin(options = {}) {
   return {
     socket,
     contexts,
+    services,
+    capabilities,
     info: args.info,
     send,
     dispose,

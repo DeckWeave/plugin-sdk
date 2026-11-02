@@ -16,6 +16,37 @@ export interface Message {
   payload?: Record<string, any>;
 }
 export interface Context<S extends Record<string, any> = Record<string, any>> {
+  panel?: PanelRecord;
+  capabilities: Record<string, number>;
+  service(operation: string, payload: unknown): Promise<any>;
+  playSound(options: {
+    sound: "complete" | "notice" | "warning";
+    volume?: number;
+    eventId: string;
+  }): Promise<{ status: "accepted" | "duplicate" }>;
+  panels: {
+    get(key?: string): Promise<PanelRecord>;
+    open(key: string, spec: PanelSpec): Promise<PanelRecord>;
+    update(
+      id: string,
+      value: { value: string; detail?: string },
+      revision?: number,
+    ): Promise<{ status: "updated" }>;
+    configure(
+      id: string,
+      revision: number,
+      spec: PanelSpec,
+    ): Promise<PanelRecord>;
+    close(id: string, revision: number): Promise<PanelRecord>;
+    timer(
+      id: string,
+      command: "start" | "pause" | "reset" | "stop",
+      options?: {
+        sound?: "complete" | "notice" | "warning" | null;
+        volume?: number;
+      },
+    ): Promise<unknown>;
+  };
   id: string;
   action: string;
   device: string;
@@ -43,6 +74,8 @@ export interface Context<S extends Record<string, any> = Record<string, any>> {
   timeout(fn: () => unknown, milliseconds: number): () => void;
 }
 export interface Plugin {
+  services: Map<string, Context>;
+  capabilities: Record<string, number>;
   socket: WebSocket;
   contexts: Map<string, Context>;
   info: Record<string, any>;
@@ -73,6 +106,40 @@ export interface Plugin {
   onDispose(fn: () => unknown): () => void;
   setGlobalSettings(settings: Record<string, any>): boolean;
   getGlobalSettings(): boolean;
+}
+export interface PanelSpec {
+  title: string;
+  content:
+    | { type: "note"; text: string }
+    | { type: "metric"; value: string; detail: string }
+    | {
+        type: "timer";
+        seconds: number;
+        sound?: "complete" | "notice" | "warning" | null;
+        volume?: number;
+      };
+  placement?: Partial<{
+    anchor: "top_left" | "top_right" | "bottom_left" | "bottom_right" | "free";
+    monitor: string | null;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    background: string;
+    foreground: string;
+    opacity: number;
+    click_through: boolean;
+  }>;
+}
+export interface PanelRecord {
+  id: string;
+  service_id: string;
+  owner: string;
+  origin: string;
+  local_key: string;
+  revision: number;
+  open: boolean;
+  spec: PanelSpec;
 }
 export function createPlugin(options?: {
   argv?: string[];
