@@ -1,4 +1,13 @@
-# DeckWeave action plugin SDK
+# DeckWeave extension SDK
+
+Two independent contracts share this repository: the existing **action** SDK
+below, and the provisional **device provider** SDK in `device.mjs`
+([device protocol](DEVICE-PROTOCOL.md)). Use `@deckweave/plugin-sdk/device` or
+vendor `device.mjs`/`device.d.mts` with its licence. A device provider owns hardware
+sessions and capabilities; it is not an Elgato action/Property Inspector.
+`plugin-template/bin/create.mjs --device` generates a self-contained two-instance
+mock provider and packager. No hardware, WebView, or third-party dependencies
+are needed. The device contract is not frozen or publicly released.
 
 Dependency-free Node.js 22+ ESM runtime for the current DeckWeave WebSocket action host. Version **0.1.0**, GPL-3.0-or-later. This package is source-distributed, not published on npm. Vendor `sdk.mjs`, `sdk.d.mts` (for relative ESM imports), `sdk.d.ts` (package exports), and `LICENSE` into a plugin's `lib/`; record the version. No Node dependencies or browser process are needed for a backend. The optional HTML Property Inspector runs only while its settings window is open.
 
@@ -34,4 +43,4 @@ Pass `onError(error, message)` through the `createPlugin({ onError })` option to
 
 Context: `setTitle`, `setImage` (data URL), `setState`, `setFeedback`, `setFeedbackLayout`, `setSettings`, `getSettings`, `showAlert`, `showOk`, `sendToPropertyInspector`, and raw `send`. All return whether a message was sent; this does **not** acknowledge execution by the host. Plugin: `on`, `send`, `setGlobalSettings`, `getGlobalSettings`, `onDispose`, `dispose`, `contexts`, `info`.
 
-Read [the protocol contract](PROTOCOL.md), [contribution guide](CONTRIBUTING.md), and run `npm test`. Hardware provider SDK is a separate future contract; this runtime does not open USB/HID or register devices.
+Read [the action protocol contract](PROTOCOL.md), [contribution guide](CONTRIBUTING.md), and run `npm test`. The action runtime does not open USB/HID or register devices. The separate provisional [device protocol](DEVICE-PROTOCOL.md) and `./device` entry support hardware providers; they are not part of the Elgato action API.

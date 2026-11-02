@@ -2,12 +2,16 @@
   "name": "@deckweave/plugin-sdk",
   "version": "0.1.0",
   "private": true,
-  "description": "Dependency-free SDK for DeckWeave action plugins",
+  "description": "Dependency-free action SDK and provisional external-device SDK",
   "type": "module",
   "exports": {
     ".": {
       "types": "./sdk.d.ts",
       "import": "./sdk.mjs"
+    },
+    "./device": {
+      "types": "./device.d.mts",
+      "import": "./device.mjs"
     }
   },
   "engines": {
@@ -16,6 +20,6 @@
   "license": "GPL-3.0-or-later",
   "scripts": {
     "test": "node --test",
-    "check": "node --check sdk.mjs && node --test"
+    "check": "node --check sdk.mjs && node --check device.mjs && node --test"
   }
 }
