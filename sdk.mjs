@@ -134,6 +134,10 @@ export function createPlugin(options = {}) {
       showOk() {
         return ctx.send("showOk");
       },
+      /** Request the current action's host-configured notification; never choose a target here. */
+      notifyKeyLighting() {
+        return ctx.send("deckweaveKeyLighting");
+      },
       sendToPropertyInspector(payload) {
         return ctx.send("sendToPropertyInspector", payload);
       },

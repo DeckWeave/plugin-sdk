@@ -30,6 +30,267 @@ const descriptor = (instanceId) => ({
   lighting: [],
 });
 const tick = () => new Promise((r) => setImmediate(r));
+const keyLightingCapability = () => ({
+  experimental: true,
+  maxKeys: 14,
+  maxRateHz: 10,
+  maxTtlMs: 3000,
+  baseline: { lightingMode: 1, colorMode: 0, minBrightness: 2 },
+  physical: "unverified",
+});
+test("experimental key lighting metadata remains bounded and unverified", () => {
+  const d = descriptor("a");
+  d.keyLighting = keyLightingCapability();
+  assert.equal(validateDescriptor(d), d);
+  for (const change of [
+    { maxKeys: 15 },
+    { maxRateHz: 11 },
+    { maxTtlMs: 3001 },
+    { experimental: false },
+    { physical: "verified" },
+    { baseline: { lightingMode: 2, colorMode: 0, minBrightness: 2 } },
+    { unknownCommand: true },
+  ]) {
+    assert.throws(
+      () =>
+        validateDescriptor({
+          ...d,
+          keyLighting: { ...d.keyLighting, ...change },
+        }),
+      /key lighting capability/,
+    );
+  }
+});
+test("key lighting routes only bounded declared physical colors to its exact active adapter", async () => {
+  const calls = [],
+    leases = new Map();
+  const f = fixture({
+    open: (id) => ({
+      descriptor: { ...descriptor(id), keyLighting: keyLightingCapability() },
+      readState: () => ({ observed: {} }),
+      keyLighting: (q) => {
+        leases.set(id, q.leaseId);
+        calls.push([id, q]);
+        return {
+          accepted: true,
+          leaseId: q.leaseId,
+          sequence: q.sequence,
+          experimental: true,
+          baseline: { "key-1": { r: 4, g: 5, b: 6 } },
+        };
+      },
+      releaseKeyLighting: (q) => {
+        if (leases.get(id) !== q.leaseId)
+          throw Object.assign(new Error("Lease belongs to another session"), {
+            code: "lease_owner",
+          });
+        leases.delete(id);
+        calls.push([id, q]);
+        return { released: true, recovery: "not_needed" };
+      },
+      close: () => ({ recovery: "not_needed" }),
+    }),
+  });
+  const ask = async (type, fields = {}) => {
+    await f.send(type, fields);
+    await tick();
+    return f.messages.at(-1);
+  };
+  await ask("hello", { protocol: 1 });
+  for (const id of ["a", "b"])
+    await ask("open", { session: id, generation: 1, instanceId: id });
+  const frame = {
+    session: "a",
+    generation: 1,
+    leaseId: "lease-a",
+    sequence: 1,
+    ttlMs: 1000,
+    colors: { "key-1": { r: 1, g: 2, b: 3 } },
+  };
+  assert.equal((await ask("keyLighting", frame)).value.accepted, true);
+  assert.equal(calls[0][0], "a");
+  assert.equal(calls[0][1].signal.aborted, false);
+  for (const changes of [{ generation: 2 }, { session: "absent" }])
+    assert.equal(
+      (await ask("keyLighting", { ...frame, ...changes })).error.code,
+      "stale_generation",
+    );
+  for (const changes of [
+    { sequence: 0 },
+    { sequence: 1.5 },
+    { sequence: Number.MAX_SAFE_INTEGER + 1 },
+    { ttlMs: 99 },
+    { ttlMs: 3001 },
+    { ttlMs: 100.5 },
+    { leaseId: "" },
+    { leaseId: "x".repeat(129) },
+    { colors: {} },
+    { colors: { "not-a-key": { r: 0, g: 0, b: 0 } } },
+    { colors: { "key-1": { r: 256, g: 0, b: 0 } } },
+    { colors: { "key-1": { r: 0, g: 0, b: 0, apply: true } } },
+    { apply: true },
+  ])
+    assert.equal(
+      (await ask("keyLighting", { ...frame, ...changes })).error.code,
+      "malformed",
+    );
+  assert.equal(
+    calls.length,
+    1,
+    "Malformed/stale frames never reach either adapter",
+  );
+  assert.equal(
+    (
+      await ask("releaseKeyLighting", {
+        session: "b",
+        generation: 1,
+        leaseId: "lease-a",
+      })
+    ).error.code,
+    "lease_owner",
+  );
+  assert.equal(
+    leases.get("a"),
+    "lease-a",
+    "Cross-session release never restores the first adapter's lease",
+  );
+  assert.equal(
+    (await ask("keyLighting", { ...frame, session: "b", leaseId: "lease-b" }))
+      .value.accepted,
+    true,
+  );
+  assert.equal(
+    (
+      await ask("releaseKeyLighting", {
+        session: "b",
+        generation: 1,
+        leaseId: "lease-b",
+      })
+    ).value.released,
+    true,
+  );
+  assert.equal(
+    calls.at(-1)[0],
+    "b",
+    "Release routes by session, not a global current device",
+  );
+  await ask("close", { session: "a", generation: 1 });
+  assert.equal(
+    (await ask("keyLighting", frame)).error.code,
+    "stale_generation",
+  );
+  await ask("close", { session: "b", generation: 1 });
+});
+test("unsupported and recovery-only key lighting do not run ordinary frame handlers", async () => {
+  for (const recoveryOnly of [false, true]) {
+    let frames = 0,
+      releases = 0;
+    const f = fixture({
+      recoveryOnly,
+      open: (id) => ({
+        descriptor: { ...descriptor(id), keyLighting: keyLightingCapability() },
+        readState: () => ({ observed: {} }),
+        ...(recoveryOnly
+          ? {
+              keyLighting: () => {
+                frames++;
+              },
+              releaseKeyLighting: () => {
+                releases++;
+                return { released: true, recovery: "not_needed" };
+              },
+            }
+          : {}),
+        close: () => ({ recovery: "not_needed" }),
+      }),
+    });
+    const ask = async (type, fields = {}) => {
+      await f.send(type, fields);
+      await tick();
+      return f.messages.at(-1);
+    };
+    await ask("hello", { protocol: 1 });
+    const session = { session: "a", generation: 1 };
+    await ask("open", { ...session, instanceId: "a" });
+    assert.equal(
+      (
+        await ask("keyLighting", {
+          ...session,
+          leaseId: "l",
+          sequence: 1,
+          ttlMs: 100,
+          colors: { "key-1": { r: 0, g: 0, b: 0 } },
+        })
+      ).error.code,
+      recoveryOnly ? "recovery_only" : "unsupported",
+    );
+    if (recoveryOnly)
+      assert.equal(
+        (await ask("releaseKeyLighting", { ...session, leaseId: "l" })).value
+          .released,
+        true,
+      );
+    assert.equal(frames, 0);
+    assert.equal(releases, recoveryOnly ? 1 : 0);
+    await ask("close", session);
+  }
+});
+test("uncertain RAM writes retain recovery and allow only explicit release; EOF cancel is adapter-owned", async () => {
+  let cancelled = 0,
+    releases = 0,
+    frames = 0;
+  const f = fixture({
+    open: (id) => ({
+      descriptor: { ...descriptor(id), keyLighting: keyLightingCapability() },
+      readState: () => ({ observed: {} }),
+      keyLighting: () => {
+        frames++;
+        return { accepted: false };
+      },
+      releaseKeyLighting: ({ signal }) => {
+        assert.equal(signal.aborted, false);
+        releases++;
+        return { released: true, recovery: "not_needed" };
+      },
+      cancel: () => {
+        cancelled++;
+        return { cancelled: true };
+      },
+      close: () => ({ recovery: "not_needed" }),
+    }),
+  });
+  const ask = async (type, fields = {}) => {
+    await f.send(type, fields);
+    await tick();
+    return f.messages.at(-1);
+  };
+  await ask("hello", { protocol: 1 });
+  const session = { session: "a", generation: 1 };
+  await ask("open", { ...session, instanceId: "a" });
+  const frame = {
+    ...session,
+    leaseId: "l",
+    sequence: 1,
+    ttlMs: 100,
+    colors: { "key-1": { r: 0, g: 0, b: 0 } },
+  };
+  assert.equal((await ask("keyLighting", frame)).error.code, "write_uncertain");
+  assert.equal((await ask("keyLighting", frame)).error.code, "session_failed");
+  assert.equal(frames, 1);
+  assert.equal(
+    (await ask("releaseKeyLighting", { ...session, leaseId: "l" })).value
+      .released,
+    true,
+  );
+  assert.equal(releases, 1);
+  f.p.shutdown();
+  await tick();
+  assert.equal(
+    cancelled,
+    1,
+    "SDK requests adapter cancellation; it cannot fabricate physical RAM restoration",
+  );
+});
 test("keepCurrent needs a matching advertised preview and explicit provider outcome proof", async () => {
   let allow = false,
     proof = true,

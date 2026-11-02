@@ -106,6 +106,37 @@ export interface DeviceState {
   requested?: Record<string, unknown>;
   evidence: { transport: Evidence; readback: Evidence; physical: Evidence };
 }
+export interface KeyLightingCapability {
+  experimental: true;
+  maxKeys: number;
+  maxRateHz: number;
+  maxTtlMs: number;
+  baseline: { lightingMode: 1; colorMode: 0; minBrightness: 2 };
+  physical: "unverified";
+}
+export type KeyLightingColors = Record<
+  string,
+  { r: number; g: number; b: number }
+>;
+export interface KeyLightingFrame {
+  leaseId: string;
+  sequence: number;
+  ttlMs: number;
+  colors: KeyLightingColors;
+  signal: AbortSignal;
+}
+/** Accepted/queued only. The baseline comes from the adapter's fresh original RAM map. */
+export interface KeyLightingAck {
+  accepted: true;
+  leaseId: string;
+  sequence: number;
+  experimental: true;
+  baseline: KeyLightingColors;
+}
+export interface KeyLightingReleaseAck {
+  released: true;
+  recovery: "not_needed";
+}
 export interface Descriptor {
   instanceId: string;
   modelId: string;
@@ -127,6 +158,7 @@ export interface Descriptor {
   settings: Setting[];
   lighting: LightingGroup[];
   keyboard?: KeyboardCapabilities;
+  keyLighting?: KeyLightingCapability;
   recovery?: { preview: boolean; restore: boolean };
   observation?: {
     keyTravel: {
@@ -167,6 +199,15 @@ export interface Adapter {
     enabled: boolean;
     signal: AbortSignal;
   }) => { observing: boolean } | Promise<{ observing: boolean }>;
+  /** Adapter owns fixed slots, sequence/lease isolation, rate, TTL, journal and abort/EOF restoration. */
+  keyLighting?: (
+    request: KeyLightingFrame,
+  ) => KeyLightingAck | Promise<KeyLightingAck>;
+  /** Release is allowed during recovery, but only the adapter may restore its live owned lease. */
+  releaseKeyLighting?: (request: {
+    leaseId: string;
+    signal: AbortSignal;
+  }) => KeyLightingReleaseAck | Promise<KeyLightingReleaseAck>;
   close?: () => unknown;
   recoveryPreview?: (request: {
     snapshotId?: string;

@@ -30,17 +30,17 @@ Every host request is `{type, requestId, ...}`. A reply is
 Session replies additionally echo `session` and `generation`. Request IDs are
 unique strings within a process connection. They are never action contexts.
 
-| Host request      | Required fields                                                | Successful value                    |
-| ----------------- | -------------------------------------------------------------- | ----------------------------------- |
-| `hello`           | `protocol:1`                                                   | `{protocol:1,providerId,limits}`    |
-| `discover`        | —                                                              | `{devices:[descriptor]}`            |
-| `open`            | `session`, `generation` (positive integer), `instanceId`       | `{descriptor,state}`                |
-| `readState`       | `session`, `generation`                                        | observed state                      |
-| `setSettings`     | `session`, `generation`, `changes` object                      | state/evidence                      |
-| `display`         | `session`, `generation`, `target`, `mime`, `data` base64       | transport evidence                  |
-| `cancel`          | `session`, `generation`                                        | cancellation result                 |
-| `close`           | `session`, `generation`                                        | recovery result                     |
-| `recoveryPreview` | `session`, `generation`, optional `snapshotId`                 | explicit recovery preview           |
+| Host request      | Required fields                                                                       | Successful value                    |
+| ----------------- | ------------------------------------------------------------------------------------- | ----------------------------------- |
+| `hello`           | `protocol:1`                                                                          | `{protocol:1,providerId,limits}`    |
+| `discover`        | —                                                                                     | `{devices:[descriptor]}`            |
+| `open`            | `session`, `generation` (positive integer), `instanceId`                              | `{descriptor,state}`                |
+| `readState`       | `session`, `generation`                                                               | observed state                      |
+| `setSettings`     | `session`, `generation`, `changes` object                                             | state/evidence                      |
+| `display`         | `session`, `generation`, `target`, `mime`, `data` base64                              | transport evidence                  |
+| `cancel`          | `session`, `generation`                                                               | cancellation result                 |
+| `close`           | `session`, `generation`                                                               | recovery result                     |
+| `recoveryPreview` | `session`, `generation`, optional `snapshotId`                                        | explicit recovery preview           |
 | `recover`         | `session`, `generation`, `previewToken`, `confirmedInstanceId`, optional `resolution` | observed state plus recovery result |
 
 `hello` must succeed before other requests. Unknown messages fail with
@@ -295,3 +295,66 @@ bounded declared-choice/boolean condition, even when the group has no
 `colorChannels`. The editor obtains the required effect's name from the
 referenced setting's localized choices. Visibility is based on observed state;
 the adapter separately rejects individual-color writes in unsupported effects.
+
+## Experimental temporary key lighting
+
+This optional extension is separate from persistent `setSettings` and from
+`lighting[].staticColors`. The SDK does not invent hardware addresses, change
+the keyboard's current effect, or simulate a RAM restoration.
+
+```json
+"keyLighting": {
+  "experimental": true, "maxKeys": 14, "maxRateHz": 10, "maxTtlMs": 3000,
+  "baseline": {"lightingMode": 1, "colorMode": 0, "minBrightness": 2},
+  "physical": "unverified"
+}
+```
+
+Bounds are 1–14 keys, 1–10 frames/second, and 100–3000 ms maximum TTL.
+The current baseline contract requires Static, single colour, brightness at
+least 2; the adapter must reject an incompatible current baseline without
+changing it. A frame is:
+
+```json
+{
+  "type": "keyLighting",
+  "requestId": "r1",
+  "session": "s1",
+  "generation": 1,
+  "leaseId": "unique-notification-1",
+  "sequence": 1,
+  "ttlMs": 1500,
+  "colors": { "key-37": { "r": 255, "g": 0, "b": 0 } }
+}
+```
+
+`leaseId` is a nonempty string of at most 128 characters. Sequence is a safe
+integer starting at 1. Colors contain 1–`maxKeys` declared physical key IDs and
+exact integer `r/g/b` components in 0–255. The SDK validates this payload and
+routes it to the exact session/generation. Undeclared capabilities or missing
+optional handlers return `unsupported`; stale sessions never reach an adapter.
+
+Adapters implement optional `keyLighting(request)` and
+`releaseKeyLighting({leaseId,signal})`. A frame ACK is
+`{accepted:true,leaseId,sequence,experimental:true,baseline:{...}}`, where
+`baseline` contains fresh original RGB values for the owned keys. This means
+accepted/queued, **not rendered or physically verified**. Release uses
+`{type:"releaseKeyLighting",requestId,session,generation,leaseId}` and returns
+`{released:true,recovery:"not_needed"}` only after the adapter acknowledges RAM
+restoration. Uncertain writes or releases retain recovery rather than claiming
+success. Runtime evidence uses `physical:"unknown"`; the descriptor's
+`physical:"unverified"` marks this experimental capability.
+
+The adapter owns fixed slots per lease, increasing sequences, retired-ID
+rejection, per-session isolation, frame rate, TTL expiry, a durable original-RAM
+journal, baseline guards, and restoration on cancel/abort/close/EOF. The SDK
+does **not** enforce hardware lease expiry or restore bytes on the adapter's
+behalf. An adapter must implement its teardown accordingly; the SDK invokes
+adapter cancellation when input ends. Recovery-only mode refuses ordinary
+`keyLighting`; explicit release remains routable with a fresh non-aborted
+signal so the adapter can release only its own live lease. Cold or uncertain
+journals use the existing fresh-preview/explicit-confirmation recovery flow.
+An exact RAM recovery ACK can be
+`{kind:"keyLighting",recovery:"completed",outcome:"ram_restore_acknowledged"}`
+without fabricating full settings readback. No automatic replay or permanent
+settings write is authorized by this capability.

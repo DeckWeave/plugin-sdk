@@ -45,6 +45,22 @@ function setup(onError = () => {}) {
   Socket.last.open();
   return [p, Socket.last];
 }
+test("key lighting helper sends only its own context event and stops when invisible", () => {
+  const [p, s] = setup();
+  s.message({ event: "willAppear", context: "a" });
+  const ctx = p.contexts.get("a");
+  assert.equal(
+    ctx.notifyKeyLighting({ device: "arbitrary", colors: {} }),
+    true,
+  );
+  assert.deepEqual(s.sent.at(-1), {
+    event: "deckweaveKeyLighting",
+    context: "a",
+  });
+  s.message({ event: "willDisappear", context: "a" });
+  assert.equal(ctx.notifyKeyLighting(), false);
+  p.dispose();
+});
 test("registration, isolated contexts, settings replacement and outbound feedback", () => {
   const [p, s] = setup();
   assert.deepEqual(s.sent[0], { event: "registerPlugin", uuid: "dev.test" });

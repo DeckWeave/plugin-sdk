@@ -324,7 +324,100 @@ export function validateDescriptor(d) {
       condition(channel.visibleWhen);
     }
   }
+  if (d.keyLighting !== undefined) {
+    const cap = d.keyLighting;
+    if (
+      !object(cap) ||
+      Object.keys(cap).some(
+        (k) =>
+          ![
+            "experimental",
+            "maxKeys",
+            "maxRateHz",
+            "maxTtlMs",
+            "baseline",
+            "physical",
+          ].includes(k),
+      ) ||
+      cap.experimental !== true ||
+      !Number.isSafeInteger(cap.maxKeys) ||
+      cap.maxKeys < 1 ||
+      cap.maxKeys > 14 ||
+      !Number.isSafeInteger(cap.maxRateHz) ||
+      cap.maxRateHz < 1 ||
+      cap.maxRateHz > 10 ||
+      !Number.isSafeInteger(cap.maxTtlMs) ||
+      cap.maxTtlMs < 100 ||
+      cap.maxTtlMs > 3000 ||
+      cap.physical !== "unverified" ||
+      !object(cap.baseline) ||
+      Object.keys(cap.baseline).some(
+        (k) => !["lightingMode", "colorMode", "minBrightness"].includes(k),
+      ) ||
+      cap.baseline.lightingMode !== 1 ||
+      cap.baseline.colorMode !== 0 ||
+      cap.baseline.minBrightness !== 2
+    )
+      throw new DeviceError(
+        "descriptor",
+        "Invalid experimental key lighting capability",
+      );
+  }
   return d;
+}
+function validateKeyLighting(m, descriptor) {
+  const cap = descriptor.keyLighting;
+  if (!cap)
+    throw new DeviceError(
+      "unsupported",
+      "Experimental key lighting is not declared",
+    );
+  const fields = [
+    "type",
+    "requestId",
+    "session",
+    "generation",
+    "leaseId",
+    ...(m.type === "keyLighting" ? ["sequence", "ttlMs", "colors"] : []),
+  ];
+  if (Object.keys(m).some((key) => !fields.includes(key)))
+    throw new DeviceError("malformed", "Unexpected key lighting payload field");
+  if (
+    typeof m.leaseId !== "string" ||
+    !m.leaseId.length ||
+    m.leaseId.length > 128
+  )
+    throw new DeviceError("malformed", "Invalid key lighting lease ID");
+  if (m.type === "releaseKeyLighting") return;
+  if (
+    !Number.isSafeInteger(m.sequence) ||
+    m.sequence < 1 ||
+    !Number.isSafeInteger(m.ttlMs) ||
+    m.ttlMs < 100 ||
+    m.ttlMs > cap.maxTtlMs ||
+    !object(m.colors) ||
+    Object.keys(m.colors).length < 1 ||
+    Object.keys(m.colors).length > cap.maxKeys
+  )
+    throw new DeviceError(
+      "malformed",
+      "Invalid key lighting sequence, TTL, or slot count",
+    );
+  for (const [id, rgb] of Object.entries(m.colors)) {
+    if (!descriptor.controls.some((c) => c.id === id && c.kind === "key"))
+      throw new DeviceError(
+        "malformed",
+        "Key lighting requires declared physical keys",
+      );
+    if (
+      !object(rgb) ||
+      Object.keys(rgb).length !== 3 ||
+      !["r", "g", "b"].every(
+        (c) => Number.isInteger(rgb[c]) && rgb[c] >= 0 && rgb[c] <= 255,
+      )
+    )
+      throw new DeviceError("malformed", "Invalid key lighting RGB color");
+  }
 }
 export class DeviceProvider {
   constructor({ id, discover, open, send, limits = {}, recoveryOnly = false }) {
@@ -472,7 +565,10 @@ export class DeviceProvider {
         }
         return;
       }
-      if (this.recoveryOnly && ["setSettings", "display"].includes(m.type))
+      if (
+        this.recoveryOnly &&
+        ["setSettings", "display", "keyLighting"].includes(m.type)
+      )
         throw new DeviceError(
           "recovery_only",
           "Provider is running only for explicit recovery",
@@ -516,7 +612,8 @@ export class DeviceProvider {
           s.recoveryOnly &&
           ["readState", "recoveryPreview", "recover"].includes(m.type)
         ) &&
-        !(m.type === "observe" && m.enabled === false)
+        !(m.type === "observe" && m.enabled === false) &&
+        m.type !== "releaseKeyLighting"
       )
         throw new DeviceError(
           "session_failed",
@@ -530,6 +627,8 @@ export class DeviceProvider {
           "recoveryPreview",
           "recover",
           "observe",
+          "keyLighting",
+          "releaseKeyLighting",
         ].includes(m.type)
       )
         throw new DeviceError("unsupported", "Unsupported request");
@@ -596,7 +695,8 @@ export class DeviceProvider {
                 s.recoveryOnly &&
                 ["readState", "recoveryPreview", "recover"].includes(m.type)
               ) &&
-              !(m.type === "observe" && m.enabled === false)
+              !(m.type === "observe" && m.enabled === false) &&
+              m.type !== "releaseKeyLighting"
             )
               throw new DeviceError(
                 "session_failed",
@@ -604,11 +704,22 @@ export class DeviceProvider {
               );
             if (
               s.controller.signal.aborted &&
-              !(m.type === "observe" && m.enabled === false)
+              !(m.type === "observe" && m.enabled === false) &&
+              m.type !== "releaseKeyLighting"
             )
               throw new DeviceError("cancelled", "Session work cancelled");
             if (m.type === "setSettings" && !object(m.changes))
               throw new DeviceError("malformed", "changes must be an object");
+            if (["keyLighting", "releaseKeyLighting"].includes(m.type))
+              validateKeyLighting(m, s.descriptor);
+            if (
+              m.type === "keyLighting" &&
+              (this.recoveryOnly || s.recoveryOnly)
+            )
+              throw new DeviceError(
+                "recovery_only",
+                "Key lighting is unavailable during recovery",
+              );
             if (
               m.type === "observe" &&
               m.enabled &&
@@ -675,10 +786,30 @@ export class DeviceProvider {
             value = await fn.call(s.adapter, {
               ...m,
               signal:
-                m.type === "observe" && !m.enabled
+                (m.type === "observe" && !m.enabled) ||
+                m.type === "releaseKeyLighting"
                   ? new AbortController().signal
                   : s.controller.signal,
             });
+            if (
+              m.type === "keyLighting" &&
+              (value?.accepted !== true ||
+                value?.leaseId !== m.leaseId ||
+                value?.sequence !== m.sequence ||
+                value?.experimental !== true)
+            )
+              throw new DeviceError(
+                "write_uncertain",
+                "Adapter did not acknowledge this queued lighting frame",
+              );
+            if (
+              m.type === "releaseKeyLighting" &&
+              (value?.released !== true || value?.recovery !== "not_needed")
+            )
+              throw new DeviceError(
+                "recovery_pending",
+                "Adapter did not acknowledge RAM restoration",
+              );
             if (m.type === "recoveryPreview") {
               s.recoveryPreview =
                 token(value?.previewToken) &&
@@ -735,7 +866,8 @@ export class DeviceProvider {
             }
             if (
               s.controller.signal.aborted &&
-              !(m.type === "observe" && m.enabled === false)
+              !(m.type === "observe" && m.enabled === false) &&
+              m.type !== "releaseKeyLighting"
             )
               throw new DeviceError("cancelled", "Session work cancelled");
             const recovery = value?.recoveryState ?? value?.recovery;
@@ -759,6 +891,7 @@ export class DeviceProvider {
               "write_uncertain",
               "readback_mismatch",
               "recovery_pending",
+              "recovery_required",
             ].includes(e.code)
           ) {
             s.failed = true;

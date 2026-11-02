@@ -35,6 +35,8 @@ export interface Context<S extends Record<string, any> = Record<string, any>> {
   getSettings(): boolean;
   showAlert(): boolean;
   showOk(): boolean;
+  /** Request this action's host-configured experimental notification; no target payload. */
+  notifyKeyLighting(): boolean;
   sendToPropertyInspector(payload: unknown): boolean;
   onDispose(fn: () => unknown): () => void;
   interval(fn: () => unknown, milliseconds: number): () => void;
