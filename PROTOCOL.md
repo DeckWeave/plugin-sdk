@@ -45,6 +45,13 @@ Declare `PropertyInspectorPath` in the manifest. Host calls `window.connectElgat
 
 ## Separate provisional device SDK
 
+`showAlert` preserves the current artwork. The host adds a failure indicator
+instead of replacing the action with an empty button. DeckWeave plugins may call
+`ctx.showAlert(message)` with an optional cause (at most 512 characters). Older
+plugins can keep calling it without arguments. `showOk` clears the failure status;
+updating an image alone does not claim that an operation succeeded. The optional
+message is a DeckWeave extension; other hosts may ignore its payload.
+
 Hardware providers use `device.mjs` and the distinct provisional
 [device protocol](DEVICE-PROTOCOL.md), independently of this action SDK.
 Providers own transport and device controls; the host owns profiles, navigation

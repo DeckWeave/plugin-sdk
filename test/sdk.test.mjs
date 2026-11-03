@@ -118,6 +118,27 @@ test("unsupported host service and disconnect are explicit rejected promises", a
   socket.close();
   await assert.rejects(pending, (e) => e.code === "disconnected");
 });
+test("focus-only capability registers and forwards guarded workspace commands and host views", async () => {
+  const p = createPlugin({ arguments: { ...args, info: { deckweave: { services: { focus: 1 } } } }, WebSocket: Socket });
+  const s = Socket.last; s.open();
+  assert.equal(s.sent[1].event, "deckweaveServiceRegister");
+  s.message({ event: "willAppear", context: "strip" });
+  const getting = p.contexts.get("strip").service("focus_get", { workspace: "personal" });
+  const getRequest = s.sent.at(-1);
+  assert.equal(getRequest.operation, "focus_get");
+  const view = { version: 1, owner: "dev.test", workspace: "personal", revision: 3, phase: "work", status: "paused", live_remaining_ms: 42000 };
+  s.message({ event: "deckweaveServiceResult", requestId: getRequest.requestId, ok: true, value: view });
+  assert.deepEqual(await getting, view);
+  const payload = { workspace: "personal", revision: 3, commandId: "stable-command", command: "toggle" };
+  const controlling = p.contexts.get("strip").service("focus_control", payload);
+  const control = s.sent.at(-1); assert.deepEqual(control.payload, payload);
+  s.message({ event: "deckweaveServiceResult", requestId: control.requestId, ok: false, error: { code: "conflict", message: "Pomodoro changed" } });
+  await assert.rejects(controlling, (e) => e.code === "conflict");
+  let pushed;
+  p.on("deckweaveFocusDidChange", (ctx, message) => { assert.equal(ctx, undefined); pushed = message.payload.jobs; });
+  s.message({ event: "deckweaveFocusDidChange", payload: { jobs: [view] } });
+  assert.deepEqual(pushed, [view]); p.dispose();
+});
 test("key lighting helper sends only its own context event and stops when invisible", () => {
   const [p, s] = setup();
   s.message({ event: "willAppear", context: "a" });
@@ -263,6 +284,19 @@ test("argument validation and escaping", () => {
     Buffer.from(svgDataUrl("<svg/>").split(",")[1], "base64").toString(),
     "<svg/>",
   );
+});
+
+test("alerts preserve an optional actionable cause without changing legacy calls",()=>{
+  const [p,s]=setup();
+  s.message({event:"willAppear",context:"a",payload:{}});
+  const ctx=p.contexts.get("a");
+  ctx.showAlert("Target window unavailable");
+  assert.deepEqual(s.sent.at(-1).payload,{message:"Target window unavailable"});
+  ctx.showAlert("x".repeat(1024));
+  assert.equal(s.sent.at(-1).payload.message.length,512);
+  ctx.showAlert();assert.equal(s.sent.at(-1).event,"showAlert");
+  assert.equal(s.sent.at(-1).payload,undefined);
+  p.dispose();
 });
 test("disposing a connecting client cannot register later", () => {
   const p = createPlugin({ arguments: args, WebSocket: Socket });

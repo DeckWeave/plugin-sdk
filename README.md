@@ -42,7 +42,8 @@ Pass `onError(error, message)` through the `createPlugin({ onError })` option to
 ## Methods
 
 Optional [host services](HOST-SERVICES.md) add acknowledged sound, persistent
-desktop notes/metrics and native countdown panels. They use separate negotiated
+desktop notes/metrics, native countdown panels and shared hardware Pomodoro jobs.
+They use separate negotiated
 capabilities and background contexts; they do not extend Elgato `willAppear`.
 
 Context: `setTitle`, `setImage` (data URL), `setState`, `setFeedback`, `setFeedbackLayout`, `setSettings`, `getSettings`, `showAlert`, `showOk`, `sendToPropertyInspector`, and raw `send`. All return whether a message was sent; this does **not** acknowledge execution by the host. Plugin: `on`, `send`, `setGlobalSettings`, `getGlobalSettings`, `onDispose`, `dispose`, `contexts`, `info`.

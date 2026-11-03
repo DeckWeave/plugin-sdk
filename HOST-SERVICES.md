@@ -1,7 +1,7 @@
 # Shared host services (version 1)
 
 Optional DeckWeave extensions, independent of Elgato compatibility. Inspect
-`plugin.capabilities` (`sound`, `panels`, `timers`). Absent or zero means unsupported;
+`plugin.capabilities` (`sound`, `panels`, `timers`, `focus`). Absent or zero means unsupported;
 SDK promises reject with `error.code === 'unsupported'`. Existing SDK boolean
 methods still only acknowledge sending a message.
 
@@ -82,3 +82,60 @@ values and 1024-byte details. Errors include `unsupported`, `busy`, `quota`,
 `owner`, `conflict`, `closed`, `storage`, `content`, `placement`.
 Windows audio is implemented; other platforms return a playback failure until
 their adapter is implemented. No capability here grants device/HID access.
+
+## Workspace Pomodoro (`focus:1`)
+
+This additive service owns durable jobs independently of overlay panels and legacy
+countdowns. Identity is `(authenticated package owner, workspace)`, shared by copied
+actions on different pages/profiles. A workspace is 1–160 ASCII letters, digits,
+dots, underscores or hyphens. Maximum 32 jobs are saved. Creating a job does not
+open a window.
+
+```js
+const job = await ctx.service('focus_get', {
+  workspace: 'personal',
+  config: {
+    work_seconds: 1500, short_seconds: 300, long_seconds: 900,
+    rounds: 4, sound: 'complete', volume: 35
+  }
+});
+const next = await ctx.service('focus_control', {
+  workspace: job.workspace, revision: job.revision,
+  commandId: crypto.randomUUID(), command: 'toggle'
+});
+```
+
+`focus_get` creates only when absent; an existing job keeps its configuration.
+`focus_control` supports `start`, `pause`, `toggle`, `reset`, `skip`, and `configure`
+(the latter also requires `config`). Every control requires a current revision
+and stable command ID. The latest 64 IDs per job are deduplicated; reuse with
+different content is rejected. Older retries encounter their stale revision.
+Do not automatically repeat a conflicting toggle against a newer phase: refresh
+the view and let the user press again.
+
+Replies have the exported `FocusView` shape: version, owner, workspace, revision,
+run_id, phase (`work`, `short_break`, `long_break`), status (`idle`, `running`,
+`paused`, `ready`), round, config, remaining_ms, due_ms, transition, and
+live_remaining_ms. Render `live_remaining_ms`; persisted `remaining_ms` is not
+rewritten on ticks. `deckweaveFocusDidChange` is a package event with undefined
+context and payload `{jobs: FocusView[]}`. It arrives while controls are visible;
+hidden running jobs are scheduled by the host and retain the plugin process
+without sending display ticks. Read the current job when a control appears.
+
+Work progresses to short break except the last round, which progresses to long
+break; a break progresses back to work. Every transition leaves the next phase
+`ready` for manual start. `skip` advances one phase using the same cycle position
+rules. `reset` returns to idle work round one. Settings default to 25/5/15 minutes,
+four rounds, complete cue, volume 35; durations permit 1–86400 seconds, rounds
+1–16. Changing settings keeps a running deadline or paused remaining duration;
+new durations apply to subsequent phases. Reducing rounds during a short break
+can restart the round counter at one when that break ends.
+
+The host persists each transition before attempting its one audio cue. Local host
+service snapshot `outcomes` distinguishes `queued`, `finished`, and `failed`,
+identified by `focus-<run UUID>-<transition>`. At-most-once attempts can lose audio
+on queue/device failure or a crash; they do not guarantee audibility. Startup
+silently consumes one elapsed phase and leaves the next ready: no old sound
+replay or cascade through missed breaks. Explicit plugin disable/removal pauses
+its jobs. Stored focus records use their own version-one table; existing panel
+and timer JSON remains unchanged.

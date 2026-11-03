@@ -92,7 +92,9 @@ export function createPlugin(options = {}) {
   const serviceRequest = (context, operation, payload) =>
     new Promise((resolve, reject) => {
       const capability =
-        operation === "sound"
+        operation.startsWith("focus_")
+          ? "focus"
+          : operation === "sound"
           ? "sound"
           : operation === "timer"
             ? "timers"
@@ -224,8 +226,8 @@ export function createPlugin(options = {}) {
       getSettings() {
         return ctx.send("getSettings");
       },
-      showAlert() {
-        return ctx.send("showAlert");
+      showAlert(message) {
+        return ctx.send("showAlert", typeof message === "string" ? { message: message.slice(0, 512) } : undefined);
       },
       showOk() {
         return ctx.send("showOk");
@@ -371,7 +373,7 @@ export function createPlugin(options = {}) {
       socket.send(
         JSON.stringify({ event: args.registerEvent, uuid: args.uuid }),
       );
-      if (capabilities.panels || capabilities.sound)
+      if (capabilities.panels || capabilities.sound || capabilities.focus)
         socket.send(
           JSON.stringify({
             event: "deckweaveServiceRegister",

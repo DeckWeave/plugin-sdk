@@ -64,7 +64,7 @@ export interface Context<S extends Record<string, any> = Record<string, any>> {
   setFeedbackLayout(layout: string): boolean;
   setSettings(settings: S): boolean;
   getSettings(): boolean;
-  showAlert(): boolean;
+  showAlert(message?: string): boolean;
   showOk(): boolean;
   /** Request this action's host-configured experimental notification; no target payload. */
   notifyKeyLighting(): boolean;
@@ -140,6 +140,37 @@ export interface PanelRecord {
   revision: number;
   open: boolean;
   spec: PanelSpec;
+}
+/** Additive host-owned Pomodoro API via ctx.service('focus_get'|'focus_control', payload). */
+export interface FocusConfig {
+  work_seconds: number;
+  short_seconds: number;
+  long_seconds: number;
+  rounds: number;
+  sound: "complete" | "notice" | "warning" | null;
+  volume: number;
+}
+export interface FocusView {
+  version: 1;
+  owner: string;
+  workspace: string;
+  revision: number;
+  run_id: string;
+  phase: "work" | "short_break" | "long_break";
+  status: "idle" | "running" | "paused" | "ready";
+  round: number;
+  config: FocusConfig;
+  remaining_ms: number;
+  due_ms: number | null;
+  transition: number;
+  live_remaining_ms: number;
+}
+export interface FocusControl {
+  workspace: string;
+  revision: number;
+  commandId: string;
+  command: "start" | "pause" | "toggle" | "reset" | "skip" | "configure";
+  config?: FocusConfig;
 }
 export function createPlugin(options?: {
   argv?: string[];
